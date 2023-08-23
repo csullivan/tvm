@@ -23,6 +23,8 @@
  */
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <nccl.h>
+
 #include <dmlc/thread_local.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/profiling.h>
