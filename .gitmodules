@@ -33,4 +33,4 @@
 	url = https://github.com/flashinfer-ai/flashinfer.git
 [submodule "3rdparty/trt-llm-allreduce"]
 	path = 3rdparty/trt-llm-allreduce
-	url = git@github.com:csullivan/trt-llm-allreduce.git
+	url = https://github.com/csullivan/trt-llm-allreduce.git
