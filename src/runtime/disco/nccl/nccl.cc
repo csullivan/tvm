@@ -24,6 +24,7 @@
 #include <tvm/runtime/registry.h>
 
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -38,6 +39,7 @@
 #if TVM_NCCL_RCCL_SWITCH == 0
 #include <nccl.h>
 
+#include "../../../../3rdparty/trt-llm-allreduce/include/cuda_allreduce.h"
 #include "../../cuda/cuda_common.h"
 #else
 #include <rccl/rccl.h>
@@ -140,6 +142,7 @@ struct CCLThreadLocalContext {
   int device_id;
   deviceStream_t default_stream = nullptr;
   ncclComm_t comm;
+  std::unique_ptr<CustomAllReduce> custom_allreduce;
 
   void Clear() {
     NCCL_CALL(ncclCommDestroy(comm));
@@ -194,6 +197,8 @@ void InitCCLPerWorker(IntTuple device_ids, std::string unique_id_bytes) {
   ncclUniqueId id;
   std::memcpy(id.internal, unique_id_bytes.data(), NCCL_UNIQUE_ID_BYTES);
   NCCL_CALL(ncclCommInitRank(&ctx->comm, worker->num_workers, id, worker->worker_id));
+  ctx->custom_allreduce =
+      std::make_unique<CustomAllReduce>(worker->num_workers, worker->worker_id, ctx->comm);
 }
 
 void AllReduce(NDArray send, ReduceKind reduce_kind, NDArray recv) {
@@ -201,9 +206,15 @@ void AllReduce(NDArray send, ReduceKind reduce_kind, NDArray recv) {
   ShapeTuple shape = send.Shape();
   int64_t numel = shape->Product();
   deviceStream_t stream = ctx->GetDefaultStream();
-  NCCL_CALL(ncclAllReduce(send->data, recv->data, numel,
-                          /*datatype=*/AsNCCLDataType(DataType(send->dtype)),
-                          /*op=*/AsNCCLRedOp(reduce_kind), ctx->comm, stream));
+  ncclDataType_t nccl_dtype = AsNCCLDataType(DataType(send->dtype));
+  ncclRedOp_t nccl_op = AsNCCLRedOp(reduce_kind);
+  if (!ctx->custom_allreduce ||
+      !ctx->custom_allreduce->enqueue(send->data, recv->data, numel, send->dtype.bits / 8,
+                                      nccl_dtype, nccl_op, stream)) {
+    NCCL_CALL(ncclAllReduce(send->data, recv->data, numel,
+                            /*datatype=*/nccl_dtype,
+                            /*op=*/nccl_op, ctx->comm, stream));
+  }
 }
 
 void AllGather(NDArray send, NDArray recv) {
