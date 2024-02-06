@@ -79,6 +79,58 @@ def test_allreduce(session_kind, ccl):
 
 @pytest.mark.parametrize("session_kind", _all_session_kinds)
 @pytest.mark.parametrize("ccl", _ccl)
+def test_benchmark_allreduce(session_kind, ccl):
+    import matplotlib.pyplot as plt
+    import time
+
+    devices = [0, 1]
+    sess = session_kind(num_workers=len(devices))
+    sess.init_ccl(ccl, *devices)
+
+    message_sizes_bytes = 2 ** np.arange(11, 31)
+
+    bandwidths = []
+    data_sizes = []
+
+    for size_bytes in message_sizes_bytes:
+        num_elements = size_bytes // 4
+
+        array_1 = np.random.randn(num_elements).astype("float32")
+        array_2 = np.random.randn(num_elements).astype("float32")
+
+        d_array = sess.empty(array_1.shape, "float32")
+        d_array.debug_copy_from(0, array_1)
+        d_array.debug_copy_from(1, array_2)
+
+        dst_array = sess.empty(array_1.shape, "float32")
+        sess.allreduce(d_array, dst_array, op="sum")
+
+        start_time = time.time()
+        sess.allreduce(d_array, dst_array, op="sum")
+        end_time = time.time()
+
+        duration = end_time - start_time
+
+        data_size_gb = size_bytes / 1e9
+        bandwidth = data_size_gb / duration
+
+        print(f"Message Size: {data_size_gb} GiB, Bandwidth: {bandwidth} GB/s")
+        data_sizes.append(data_size_gb)pre
+        bandwidths.append(bandwidth)
+
+    plt.plot(data_sizes, bandwidths, marker="o", label="Allreduce Bandwidth")
+    plt.xscale("log", basex=2)
+    plt.yscale("log", basey=10)
+    plt.xlabel("Message Size (bytes)")
+    plt.ylabel("Bandwidth (GB/s)")
+    plt.title("Allreduce Bandwidth vs Message Size")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+@pytest.mark.parametrize("session_kind", _all_session_kinds)
+@pytest.mark.parametrize("ccl", _ccl)
 def test_allgather(session_kind, ccl):
     devices = [0, 1]
     sess = session_kind(num_workers=len(devices))

@@ -172,10 +172,10 @@ void InitCCL(Session sess, IntTuple device_ids) {
   NCCL_CALL(ncclGetUniqueId(&id));
   array.data = id.internal;
   array.size = NCCL_UNIQUE_ID_BYTES;
-  sess->CallPacked(func, device_ids, array);
+  sess->CallPacked(func, device_ids, array, sess->_type_key == "runtime.disco.ProcessSession");
 }
 
-void InitCCLPerWorker(IntTuple device_ids, std::string unique_id_bytes) {
+void InitCCLPerWorker(IntTuple device_ids, std::string unique_id_bytes, bool is_process_session) {
   CCLThreadLocalContext* ctx = CCLThreadLocalContext::Get();
   DiscoWorker* worker = DiscoWorker::ThreadLocal();
   ICHECK(worker != nullptr);
@@ -197,8 +197,10 @@ void InitCCLPerWorker(IntTuple device_ids, std::string unique_id_bytes) {
   ncclUniqueId id;
   std::memcpy(id.internal, unique_id_bytes.data(), NCCL_UNIQUE_ID_BYTES);
   NCCL_CALL(ncclCommInitRank(&ctx->comm, worker->num_workers, id, worker->worker_id));
-  ctx->custom_allreduce =
-      std::make_unique<CustomAllReduce>(worker->num_workers, worker->worker_id, ctx->comm);
+  if (is_process_session) {
+    ctx->custom_allreduce =
+        std::make_unique<CustomAllReduce>(worker->num_workers, worker->worker_id, ctx->comm);
+  }
 }
 
 void AllReduce(NDArray send, ReduceKind reduce_kind, NDArray recv) {
