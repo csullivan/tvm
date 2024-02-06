@@ -82,17 +82,19 @@ def test_allreduce(session_kind, ccl):
 def test_benchmark_allreduce(session_kind, ccl):
     import matplotlib.pyplot as plt
     import time
+    from tqdm import tqdm
 
     devices = [0, 1]
     sess = session_kind(num_workers=len(devices))
     sess.init_ccl(ccl, *devices)
 
-    message_sizes_bytes = 2 ** np.arange(11, 31)
+    # message_sizes_bytes = 2 ** np.arange(11, 31)
+    message_sizes_bytes = 2 ** np.arange(11, 29)
 
     bandwidths = []
     data_sizes = []
 
-    for size_bytes in message_sizes_bytes:
+    for size_bytes in tqdm(message_sizes_bytes, desc="all-reduce-test-bench"):
         num_elements = size_bytes // 4
 
         array_1 = np.random.randn(num_elements).astype("float32")
@@ -104,29 +106,31 @@ def test_benchmark_allreduce(session_kind, ccl):
 
         dst_array = sess.empty(array_1.shape, "float32")
         sess.allreduce(d_array, dst_array, op="sum")
+        # bench
+        durations = []
+        for _ in range(10):
+            start_time = time.perf_counter()
+            sess.allreduce(d_array, dst_array, op="sum")
+            end_time = time.perf_counter()
+            durations.append(end_time - start_time)
+        avg_duration = sum(durations) / len(durations)
 
-        start_time = time.time()
-        sess.allreduce(d_array, dst_array, op="sum")
-        end_time = time.time()
+        data_size_gib = size_bytes / (2**30)  # Convert bytes to GiB
+        bandwidth = size_bytes / 1e9 / avg_duration  # Bandwidth in GB/s
 
-        duration = end_time - start_time
-
-        data_size_gb = size_bytes / 1e9
-        bandwidth = data_size_gb / duration
-
-        print(f"Message Size: {data_size_gb} GiB, Bandwidth: {bandwidth} GB/s")
-        data_sizes.append(data_size_gb)pre
+        print(f"Message Size: {data_size_gib} GiB, Bandwidth: {bandwidth} GiB/s")
+        data_sizes.append(data_size_gib)
         bandwidths.append(bandwidth)
 
     plt.plot(data_sizes, bandwidths, marker="o", label="Allreduce Bandwidth")
-    plt.xscale("log", basex=2)
-    plt.yscale("log", basey=10)
-    plt.xlabel("Message Size (bytes)")
+    plt.xscale("log", base=2)
+    plt.yscale("log", base=10)
+    plt.xlabel("Message Size (GiB)")
     plt.ylabel("Bandwidth (GB/s)")
     plt.title("Allreduce Bandwidth vs Message Size")
     plt.legend()
     plt.grid(True)
-    plt.show()
+    plt.savefig("cuda_allreduce_perf.png")
 
 
 @pytest.mark.parametrize("session_kind", _all_session_kinds)
