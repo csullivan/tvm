@@ -31,3 +31,6 @@
 [submodule "3rdparty/flashinfer"]
 	path = 3rdparty/flashinfer
 	url = https://github.com/flashinfer-ai/flashinfer.git
+[submodule "3rdparty/TensorRT-LLM"]
+	path = 3rdparty/TensorRT-LLM
+	url = https://github.com/NVIDIA/TensorRT-LLM
