@@ -384,7 +384,7 @@ static constexpr const char* _cuda_warp_intrinsic_util = R"(
 void declare_vector_type_extensions(std::ostringstream& stream, bool enable_fp16, bool enable_fp8) {
   if (enable_fp16 || enable_fp8) {
     stream << R"(
-struct __align__(4) half4 {
+struct __align__(8) half4 {
   __half x, y, z, w;
   __host__ __device__ half4() : x(__half(0)), y(__half(0)), z(__half(0)), w(__half(0)) {}
   __host__ __device__ half4(__half x, __half y, __half z, __half w) : x(x), y(y), z(z), w(w) {}
