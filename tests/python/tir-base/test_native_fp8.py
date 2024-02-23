@@ -693,5 +693,27 @@ def test_fp8e4x4_quant_dequant_weight(weight_shape):
     tvm.testing.assert_allclose(weight_np, dequant_weight_np, atol=10, rtol=5e-2)
 
 
+@tvm.testing.requires_cuda_compute_version(9)
+def test_cutlass_fp16_fp8_e4m3_scale():
+    target = "cuda"
+    dtype = "float16"
+    quantize_dtype = "e4m3_float8"
+    quantize_dtype_np = "float8_e4m3fn"
+
+    batch_size = 1
+    M, N, K = 4096, 22016, 4096
+    group_size = 64
+
+    gemm = tvm._ffi.get_global_func("cutlass.mixed_dtype_gemm_fp16_fp8_scale")
+
+    dev = tvm.device(target, 0)
+    A = tvm.nd.array(np.random.uniform(-1, 1, (batch_size, M, K)).astype(dtype), dev)
+    B = tvm.nd.array(np.random.uniform(-1, 1, (batch_size, K, N)).astype(quantize_dtype_np), dev)
+    C = tvm.nd.array(np.zeros((batch_size, M, N), dtype=dtype), dev)
+    D = tvm.nd.array(np.zeros((batch_size, M, N), dtype=dtype), dev)
+    S = tvm.nd.array(np.random.uniform(-1, 1, (batch_size, N, K // group_size)).astype(dtype), dev)
+    gemm(A, B, C, D, S, M, N, K, batch_size, group_size)
+
+
 if __name__ == "__main__":
     tvm.testing.main()

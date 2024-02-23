@@ -60,12 +60,19 @@ if(USE_CUDA AND USE_CUTLASS)
   ### Build cutlass runtime objects using TVM's 3rdparty/cutlass submodule
   set(CUTLASS_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass)
   set(TVM_CUTLASS_RUNTIME_SRCS "")
-  if (CMAKE_CUDA_ARCHITECTURES MATCHES "90")
+  if (CMAKE_CUDA_ARCHITECTURES MATCHES "90a")
     list(APPEND TVM_CUTLASS_RUNTIME_SRCS src/runtime/contrib/cutlass/fp16_fp8_gemm.cu)
   endif()
   if(TVM_CUTLASS_RUNTIME_SRCS)
     add_library(tvm_cutlass_objs OBJECT ${TVM_CUTLASS_RUNTIME_SRCS})
-    target_include_directories(tvm_cutlass_objs PRIVATE ${CUTLASS_DIR}/include)
+    target_include_directories(tvm_cutlass_objs PRIVATE
+      ${CUTLASS_DIR}/include
+      ${CUTLASS_DIR}/tools/util/include
+    )
+    if (CMAKE_CUDA_ARCHITECTURES MATCHES "90a")
+      target_compile_definitions(tvm_cutlass_objs PRIVATE __CUDA_ARCH_FEAT_SM90_ALL)
+      target_compile_options(tvm_cutlass_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    endif()
     list(APPEND CUTLASS_RUNTIME_OBJS "$<${CUTLASS_GEN_COND}:$<TARGET_OBJECTS:tvm_cutlass_objs>>")
   endif()
 
