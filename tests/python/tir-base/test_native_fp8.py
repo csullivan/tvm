@@ -881,13 +881,13 @@ class TestCutlassFP16FP8GemmScaleOnly(TestFP8e4x4QuantDequantScale):
             act_cutlass,
             quant_weight_cutlass,
             bias_matrix_cutlass,
-            output_cutlass,
             scales,
             M,
             N,
             K,
             batch_size,
             group_size,
+            output_cutlass,
         )
 
         # Reference
@@ -998,13 +998,13 @@ class TestBenchCutlassFP16FP8GemmScaleOnly(TestCutlassFP16FP8GemmScaleOnly):
             act_cutlass,
             quant_weight_cutlass,
             bias_matrix_cutlass,
-            output_cutlass,
             scales,
             M,
             N,
             K,
             batch_size,
             group_size,
+            output_cutlass,
         )
 
         # Reference

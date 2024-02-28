@@ -67,17 +67,25 @@ GemmArguments gemm_args_from_packed_args(int64_t m, int64_t n, int64_t k, int64_
 namespace tvm {
 namespace runtime {
 
-void _cutlass_mixed_dtype_gemm_fp16_fp8_scale(DLTensor* A, DLTensor* B, DLTensor* C, DLTensor* D,
-                                              DLTensor* S, int64_t m, int64_t n, int64_t k,
-                                              int64_t l, int64_t g) {
+void _cutlass_mixed_dtype_gemm_fp16_fp8_scale(DLTensor* A, DLTensor* B, DLTensor* C, DLTensor* S,
+                                              int64_t m, int64_t n, int64_t k, int64_t l, int64_t g,
+                                              DLTensor* D) {
   auto rawA = static_cast<cutlass::half_t*>(A->data);
   auto rawB = static_cast<cutlass::float_e4m3_t*>(B->data);
-  auto rawC = static_cast<cutlass::half_t*>(C->data);
+  cutlass::half_t* rawC = nullptr;
+  if (C) {
+    rawC = static_cast<cutlass::half_t*>(C->data);
+  }
   auto rawD = static_cast<cutlass::half_t*>(D->data);
   auto rawS = static_cast<cutlass::half_t*>(S->data);
 
+  float alpha = 1.0;
+  float beta = 0.0;
+  if (rawC) {
+    beta = 1.0;
+  }
   auto args = gemm_args_from_packed_args<typename GemmScaleOnly::Arguments>(
-      m, n, k, l, g, 1.0, 0.0, rawA, rawB, rawC, rawD, rawS);
+      m, n, k, l, g, alpha, beta, rawA, rawB, rawC, rawD, rawS);
 
   GemmScaleOnly gemm;
 
@@ -90,6 +98,14 @@ void _cutlass_mixed_dtype_gemm_fp16_fp8_scale(DLTensor* A, DLTensor* B, DLTensor
   CUTLASS_CHECK(gemm.run());
 }
 
+void _cutlass_mixed_dtype_matmul_fp16_fp8_scale(DLTensor* A, DLTensor* B, DLTensor* S, int64_t m,
+                                                int64_t n, int64_t k, int64_t l, int64_t g,
+                                                DLTensor* D) {
+  _cutlass_mixed_dtype_gemm_fp16_fp8_scale(A, B, nullptr, S, m, n, k, l, g, D);
+}
+
+TVM_REGISTER_GLOBAL("cutlass.mixed_dtype_matmul_fp16_fp8_scale")
+    .set_body_typed(_cutlass_mixed_dtype_matmul_fp16_fp8_scale);
 TVM_REGISTER_GLOBAL("cutlass.mixed_dtype_gemm_fp16_fp8_scale")
     .set_body_typed(_cutlass_mixed_dtype_gemm_fp16_fp8_scale);
 }  // namespace runtime
