@@ -56,9 +56,9 @@ class Conv2dReLU_composite_annotated:
     ) -> R.Tensor((1, 64, 56, 56), dtype="float32"):
         cls = Conv2dReLU_composite_annotated
         with R.dataflow():
-            gv: R.Tensor(
-                (1, 64, 56, 56), dtype="float32"
-            ) = cls.fused_relax_nn_conv2d_relax_nn_relu_dnnl(data, weight1)
+            gv: R.Tensor((1, 64, 56, 56), dtype="float32") = (
+                cls.fused_relax_nn_conv2d_relax_nn_relu_dnnl(data, weight1)
+            )
             R.output(gv)
         return gv
 
@@ -120,12 +120,12 @@ class Conv2dReLUx2Partitioned:
     ) -> R.Tensor((1, 64, 54, 54), dtype="float32"):
         cls = Conv2dReLUx2Partitioned
         with R.dataflow():
-            lv: R.Tensor(
-                (1, 64, 56, 56), dtype="float32"
-            ) = cls.fused_relax_nn_conv2d_relax_nn_relu(data, weight1)
-            gv: R.Tensor(
-                (1, 64, 54, 54), dtype="float32"
-            ) = cls.fused_relax_nn_conv2d_relax_nn_relu1(lv, weight2)
+            lv: R.Tensor((1, 64, 56, 56), dtype="float32") = (
+                cls.fused_relax_nn_conv2d_relax_nn_relu(data, weight1)
+            )
+            gv: R.Tensor((1, 64, 54, 54), dtype="float32") = (
+                cls.fused_relax_nn_conv2d_relax_nn_relu1(lv, weight2)
+            )
             R.output(gv)
         return gv
 
@@ -235,9 +235,9 @@ class Conv2dConv2dReLUPartitioned:
             lv: R.Tensor((1, 64, 56, 56), dtype="float32") = cls.fused_relax_nn_conv2d(
                 data, weight1
             )
-            gv: R.Tensor(
-                (1, 64, 54, 54), dtype="float32"
-            ) = cls.fused_relax_nn_conv2d_relax_nn_relu(lv, weight2)
+            gv: R.Tensor((1, 64, 54, 54), dtype="float32") = (
+                cls.fused_relax_nn_conv2d_relax_nn_relu(lv, weight2)
+            )
             R.output(gv)
         return gv
 
@@ -1022,6 +1022,21 @@ def test_matmul_add3():
     mod = partition_for_cutlass(Module)
     func_names = [name.name_hint for (name, _) in mod.functions.items()]
     assert "fused_relax_matmul_relax_add_relax_add_cutlass" in func_names
+
+
+def test_rms_norm():
+    @tvm.script.ir_module
+    class RMSNorm:
+        @R.function
+        def main(data: R.Tensor((1, 64, 3), "float16"), weight: R.Tensor((3,), "float16")):
+            with R.dataflow():
+                out = R.nn.rms_norm(data, weight)
+                R.output(out)
+            return out
+
+    mod = partition_for_cutlass(RMSNorm)
+    func_names = [name.name_hint for (name, _) in mod.functions.items()]
+    assert "fused_relax_nn_rms_norm_cutlass" in func_names
 
 
 def test_intermediate_var_to_var_binding():

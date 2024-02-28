@@ -464,21 +464,12 @@ def layer_norm_pattern():
     ]
 
 
-def _check_rms_norm(ctx: PatternCheckContext) -> bool:
-    rms_norm = ctx.annotated_expr["rms_norm"]
-    if "rms_norm" not in rms_norm.args[0].name_hint:
-        return False
-
-    return True
-
-
 def rms_norm_pattern():
     """Create a RMS norm pattern for CUTLASS."""
     return [
         (
             "cutlass.rms_norm",
             *make_rms_norm_pattern(),
-            _check_rms_norm,
         ),
     ]
 
