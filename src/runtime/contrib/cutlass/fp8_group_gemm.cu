@@ -154,13 +154,13 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
   offset += aligned(sizeof(ElementC*) * num_experts);
   typename ProblemShape::UnderlyingProblemShape* problem_sizes =
       reinterpret_cast<typename ProblemShape::UnderlyingProblemShape*>(workspace + offset);
-  offset += sizeof(typename ProblemShape::UnderlyingProblemShape) * num_experts;
+  offset += aligned(sizeof(typename ProblemShape::UnderlyingProblemShape) * num_experts);
   StrideA* stride_A = reinterpret_cast<StrideA*>(workspace + offset);
-  offset += sizeof(StrideA) * num_experts;
+  offset += aligned(sizeof(StrideA) * num_experts);
   StrideB* stride_B = reinterpret_cast<StrideB*>(workspace + offset);
-  offset += sizeof(StrideB) * num_experts;
+  offset += aligned(sizeof(StrideB) * num_experts);
   StrideC* stride_D = reinterpret_cast<StrideC*>(workspace + offset);
-  offset += sizeof(StrideC) * num_experts;
+  offset += aligned(sizeof(StrideC) * num_experts);
   prepare_group_gemm_arguments<<<1, num_experts, 0, stream>>>(
       ptr_A, ptr_B, ptr_D, problem_sizes, stride_A, stride_B, stride_D, x, weight, out,
       total_rows_before_expert, n, k, num_experts);
