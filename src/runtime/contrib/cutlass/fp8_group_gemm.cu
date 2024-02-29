@@ -177,6 +177,7 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
       hw_info};
   Gemm gemm_op;
   CUTLASS_CHECK(gemm_op.can_implement(arguments));
+  offset = aligned(offset, 256);
   int64_t remaining_workspace = workspace_size - static_cast<int64_t>(offset);
   CHECK_GE(remaining_workspace, gemm_op.get_workspace_size(arguments));
   CUTLASS_CHECK(gemm_op.initialize(arguments, workspace + offset, stream));
