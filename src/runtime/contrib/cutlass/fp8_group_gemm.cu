@@ -86,8 +86,8 @@ __global__ void prepare_group_gemm_arguments(
 
 template <typename ElementA, typename ElementB, typename ElementC>
 void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_before_expert,
-                          uint8_t* workspace, int64_t total_rows, int64_t n, int64_t k,
-                          int64_t num_experts, ElementC* out, cudaStream_t stream) {
+                          uint8_t* workspace, int64_t workspace_size, int64_t total_rows, int64_t n,
+                          int64_t k, int64_t num_experts, ElementC* out, cudaStream_t stream) {
   // A matrix configuration
   using LayoutA = cutlass::layout::RowMajor;  // Layout type for A matrix operand
   constexpr int AlignmentA =
@@ -177,11 +177,10 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
       hw_info};
   Gemm gemm_op;
   CUTLASS_CHECK(gemm_op.can_implement(arguments));
-  void* cutlass_workspace = nullptr;
-  cudaMallocAsync(&cutlass_workspace, Gemm::get_workspace_size(arguments), stream);
-  CUTLASS_CHECK(gemm_op.initialize(arguments, cutlass_workspace, stream));
+  int64_t remaining_workspace = workspace_size - static_cast<int64_t>(offset);
+  CHECK_GE(remaining_workspace, gemm_op.get_workspace_size(arguments));
+  CUTLASS_CHECK(gemm_op.initialize(arguments, workspace + offset, stream));
   CUTLASS_CHECK(gemm_op.run());
-  CUDA_CALL(cudaFreeAsync(cutlass_workspace, stream));
 }
 
 namespace tvm {
@@ -191,16 +190,15 @@ template <typename ElementA, typename ElementB, typename ElementC>
 void tvm_cutlass_fp8_moe_gemm(NDArray x, NDArray weight, NDArray total_rows_before_expert,
                               NDArray workspace, int64_t total_rows, int64_t n, int64_t k,
                               int64_t num_experts, NDArray out) {
-  // workspace: currently only used to store the parameters for ther kernel, it is not used as
-  // the workspace for the cutlass internal computation. Workspace of 4kB is sufficient for the
-  // parameters.
+  // Workspace is used for storing device-side group gemm arguments and cutlass internal workspace.
+  // Recommened size is 4MB.
   auto func = tvm::runtime::Registry::Get("runtime.get_cuda_stream");
   ICHECK(func != nullptr);
   cudaStream_t stream = static_cast<cudaStream_t>((*func)().operator void*());
   cutlass_fp8_moe_gemm(static_cast<ElementA*>(x->data), static_cast<ElementB*>(weight->data),
                        static_cast<int64_t*>(total_rows_before_expert->data),
-                       static_cast<uint8_t*>(workspace->data), total_rows, n, k, num_experts,
-                       static_cast<ElementC*>(out->data), stream);
+                       static_cast<uint8_t*>(workspace->data), workspace->shape[0], total_rows, n,
+                       k, num_experts, static_cast<ElementC*>(out->data), stream);
 }
 
 TVM_REGISTER_GLOBAL("cutlass.moe_gemm_e5m2_e5m2_fp16")
