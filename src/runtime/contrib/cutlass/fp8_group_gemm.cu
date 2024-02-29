@@ -111,7 +111,7 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
   using ArchTag =
       cutlass::arch::Sm90;  // Tag indicating the minimum SM that supports the intended feature
   using OperatorClass = cutlass::arch::OpClassTensorOp;  // Operator class tag
-  using TileShape = Shape<_256, _128, _64>;              // Threadblock-level tile size
+  using TileShape = Shape<_128, _256, _64>;              // Threadblock-level tile size
   using ClusterShape = Shape<_2, _2, _1>;                // Shape of the threadblocks in a cluster
   using StageCountType =
       cutlass::gemm::collective::StageCountAuto;  // Stage count maximized based on the tile size
