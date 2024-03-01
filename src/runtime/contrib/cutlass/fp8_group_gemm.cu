@@ -64,45 +64,20 @@ inline size_t aligned(size_t value, size_t alignment = 16) {
   return (value + alignment - 1) / alignment * alignment;
 }
 
-template <typename ElementA, typename ElementB, typename ElementC, typename StrideA,
-          typename StrideB, typename StrideC>
-__global__ void prepare_group_gemm_arguments(
-    const ElementA** ptr_A, const ElementB** ptr_B, ElementC** ptr_D,
-    typename ProblemShape::UnderlyingProblemShape* problem_sizes, StrideA* stride_A,
-    StrideB* stride_B, StrideC* stride_D, ElementA* x, ElementB* weight, ElementC* out,
-    int64_t* total_rows, int64_t n, int64_t k, int64_t num_experts) {
-  int expert_id = threadIdx.x;
-  if (expert_id >= num_experts) return;
-  int prev_rows = expert_id == 0 ? 0 : total_rows[expert_id - 1];
-  ptr_A[expert_id] = x + prev_rows * k;
-  ptr_B[expert_id] = weight + expert_id * k * n;
-  ptr_D[expert_id] = out + prev_rows * n;
-  problem_sizes[expert_id] = {static_cast<int>(total_rows[expert_id] - prev_rows),
-                              static_cast<int>(n), static_cast<int>(k)};
-  stride_A[expert_id] = cute::make_stride(k, Int<1>{}, int64_t{0});
-  stride_B[expert_id] = cute::make_stride(k, Int<1>{}, int64_t{0});
-  stride_D[expert_id] = cute::make_stride(n, Int<1>{}, int64_t{0});
-}
-
-template <typename ElementA, typename ElementB, typename ElementC>
-void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_before_expert,
-                          uint8_t* workspace, int64_t workspace_size, int64_t total_rows, int64_t n,
-                          int64_t k, int64_t num_experts, ElementC* out, cudaStream_t stream) {
-  // A matrix configuration
-  using LayoutA = cutlass::layout::RowMajor;  // Layout type for A matrix operand
-  constexpr int AlignmentA =
+template <typename ElementA, typename ElementB, typename ElementC,
+          typename LayoutA = cutlass::layout::RowMajor,
+          typename LayoutB = cutlass::layout::ColumnMajor,
+          typename LayoutC = cutlass::layout::RowMajor>
+struct CutlassFP8GroupGemmRunner {
+  static constexpr int AlignmentA =
       128 / cutlass::sizeof_bits<ElementA>::value;  // Alignment of A matrix in units of elements
                                                     // (up to 16 bytes)
 
-  // B matrix configuration
-  using LayoutB = cutlass::layout::ColumnMajor;  // Layout type for B matrix operand
-  constexpr int AlignmentB =
+  static constexpr int AlignmentB =
       128 / cutlass::sizeof_bits<ElementB>::value;  // Alignment of B matrix in units of elements
                                                     // (up to 16 bytes)
 
-  // C/D matrix configuration
-  using LayoutC = cutlass::layout::RowMajor;  // Layout type for C and D matrix operands
-  constexpr int AlignmentC =
+  static constexpr int AlignmentC =
       128 / cutlass::sizeof_bits<ElementC>::value;  // Alignment of C matrix in units of elements
                                                     // (up to 16 bytes)
 
@@ -142,9 +117,63 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
   using StrideC = typename Gemm::GemmKernel::UnderlyingStrideC;
   using StrideD = typename Gemm::GemmKernel::UnderlyingStrideD;
 
-  typename Gemm::EpilogueOutputOp::Params epilogue_params{ElementAccumulator(1.0f),
-                                                          ElementAccumulator(0.0f)};
-  // set up pointers
+  void run_group_gemm(const ElementA** ptr_A, const ElementB** ptr_B, const ElementC** ptr_C,
+                      ElementC** ptr_D,
+                      typename ProblemShape::UnderlyingProblemShape* problem_sizes,
+                      typename ProblemShape::UnderlyingProblemShape* problem_sizes_host,
+                      StrideA* stride_A, StrideB* stride_B, StrideC* stride_C, StrideD* stride_D,
+                      uint8_t* workspace, int64_t workspace_size, int num_groups, float alpha,
+                      float beta, cudaStream_t stream) {
+    typename Gemm::EpilogueOutputOp::Params epilogue_params{ElementAccumulator(alpha),
+                                                            ElementAccumulator(beta)};
+
+    cutlass::KernelHardwareInfo hw_info;
+    hw_info.device_id = 0;
+    hw_info.sm_count =
+        cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
+    typename Gemm::Arguments arguments{cutlass::gemm::GemmUniversalMode::kGrouped,
+                                       {num_groups, problem_sizes, problem_sizes_host},
+                                       {ptr_A, stride_A, ptr_B, stride_B},
+                                       {epilogue_params, ptr_C, stride_C, ptr_D, stride_D},
+                                       hw_info};
+    Gemm gemm_op;
+    CUTLASS_CHECK(gemm_op.can_implement(arguments));
+    CHECK_GE(workspace_size, gemm_op.get_workspace_size(arguments));
+    CUTLASS_CHECK(gemm_op.initialize(arguments, workspace, stream));
+    CUTLASS_CHECK(gemm_op.run());
+  }
+};
+
+template <typename ElementA, typename ElementB, typename ElementC, typename StrideA,
+          typename StrideB, typename StrideC>
+__global__ void prepare_moe_group_gemm_arguments(
+    const ElementA** ptr_A, const ElementB** ptr_B, ElementC** ptr_D,
+    typename ProblemShape::UnderlyingProblemShape* problem_sizes, StrideA* stride_A,
+    StrideB* stride_B, StrideC* stride_D, const ElementA* x, const ElementB* weight, ElementC* out,
+    int64_t* total_rows, int64_t n, int64_t k, int64_t num_experts) {
+  int expert_id = threadIdx.x;
+  if (expert_id >= num_experts) return;
+  int prev_rows = expert_id == 0 ? 0 : total_rows[expert_id - 1];
+  ptr_A[expert_id] = x + prev_rows * k;
+  ptr_B[expert_id] = weight + expert_id * k * n;
+  ptr_D[expert_id] = out + prev_rows * n;
+  problem_sizes[expert_id] = {static_cast<int>(total_rows[expert_id] - prev_rows),
+                              static_cast<int>(n), static_cast<int>(k)};
+  stride_A[expert_id] = cute::make_stride(k, Int<1>{}, int64_t{0});
+  stride_B[expert_id] = cute::make_stride(k, Int<1>{}, int64_t{0});
+  stride_D[expert_id] = cute::make_stride(n, Int<1>{}, int64_t{0});
+}
+
+template <typename ElementA, typename ElementB, typename ElementC>
+void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_before_expert,
+                          uint8_t* workspace, int64_t workspace_size, int64_t total_rows, int64_t n,
+                          int64_t k, int64_t num_experts, ElementC* out, cudaStream_t stream) {
+  using Runner = CutlassFP8GroupGemmRunner<ElementA, ElementB, ElementC>;
+  using StrideA = typename Runner::StrideA;
+  using StrideB = typename Runner::StrideB;
+  using StrideC = typename Runner::StrideC;
+
+  Runner runner;
   std::ptrdiff_t offset = 0;
   const ElementA** ptr_A = reinterpret_cast<const ElementA**>(workspace + offset);
   offset += aligned(sizeof(ElementA*) * num_experts);
@@ -161,27 +190,13 @@ void cutlass_fp8_moe_gemm(ElementA* x, ElementB* weight, int64_t* total_rows_bef
   offset += aligned(sizeof(StrideB) * num_experts);
   StrideC* stride_D = reinterpret_cast<StrideC*>(workspace + offset);
   offset += aligned(sizeof(StrideC) * num_experts);
-  prepare_group_gemm_arguments<<<1, num_experts, 0, stream>>>(
+  prepare_moe_group_gemm_arguments<<<1, num_experts, 0, stream>>>(
       ptr_A, ptr_B, ptr_D, problem_sizes, stride_A, stride_B, stride_D, x, weight, out,
       total_rows_before_expert, n, k, num_experts);
-  cutlass::KernelHardwareInfo hw_info;
-  hw_info.device_id = 0;
-  hw_info.sm_count =
-      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-
-  typename Gemm::Arguments arguments{
-      cutlass::gemm::GemmUniversalMode::kGrouped,
-      {static_cast<int>(num_experts), problem_sizes, /*problem_sizes_host=*/nullptr},
-      {ptr_A, stride_A, ptr_B, stride_B},
-      {epilogue_params, const_cast<const ElementC**>(ptr_D), stride_D, ptr_D, stride_D},
-      hw_info};
-  Gemm gemm_op;
-  CUTLASS_CHECK(gemm_op.can_implement(arguments));
   offset = aligned(offset, 256);
-  int64_t remaining_workspace = workspace_size - static_cast<int64_t>(offset);
-  CHECK_GE(remaining_workspace, gemm_op.get_workspace_size(arguments));
-  CUTLASS_CHECK(gemm_op.initialize(arguments, workspace + offset, stream));
-  CUTLASS_CHECK(gemm_op.run());
+  runner.run_group_gemm(ptr_A, ptr_B, const_cast<const ElementC**>(ptr_D), ptr_D, problem_sizes,
+                        nullptr, stride_A, stride_B, stride_D, stride_D, workspace + offset,
+                        workspace_size - offset, num_experts, 1.0f, 0.0f, stream);
 }
 
 namespace tvm {
