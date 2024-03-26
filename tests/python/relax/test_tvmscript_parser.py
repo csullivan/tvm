@@ -821,14 +821,14 @@ def test_direct_return():
 
 
 def test_call_packed():
-    @R.function
+    @R.function(pure=False)
     def foo(x: R.Tensor((32, 32), "float32")) -> R.Tensor:
         z = R.call_packed("vm.builtin.copy", x, sinfo_args=R.Tensor((32, 32), "float32"))
         return z
 
     x = relax.Var("x", R.Tensor((32, 32), "float32"))
     bb = relax.BlockBuilder()
-    with bb.function("foo", (x)):
+    with bb.function("foo", (x), pure=False):
         z = bb.emit(
             relax.Call(
                 relax.ExternFunc("vm.builtin.copy"),
@@ -843,14 +843,14 @@ def test_call_packed():
 
 
 def test_call_packed_without_sinfo_args():
-    @R.function
+    @R.function(pure=False)
     def foo(x: R.Object) -> R.Object:
         z = R.call_packed("test", x)
         return z
 
     x = relax.Var("x", R.Object())
     bb = relax.BlockBuilder()
-    with bb.function("foo", (x)):
+    with bb.function("foo", (x), pure=False):
         z = bb.emit(
             relax.Call(
                 relax.ExternFunc("test"),
@@ -865,7 +865,7 @@ def test_call_packed_without_sinfo_args():
 
 
 def test_annotation():
-    @R.function
+    @R.function(pure=False)
     def foo(
         x: R.Tensor((32, "m"), "float32"),
         y: R.Tensor(("m",), "float32"),
@@ -1552,7 +1552,7 @@ def test_memory_ops():
 
 
 def test_vm_ops():
-    @R.function
+    @R.function(pure=False)
     def foo(x: R.Tensor(("m", "n"), dtype="float32")):
         m = T.int64()
         n = T.int64()
@@ -1576,7 +1576,7 @@ def test_builtin_ops():
 
 
 def test_prim_value():
-    @R.function
+    @R.function(pure=False)
     def foo():
         gv = R.call_packed("test", 1, sinfo_args=R.Tensor((32, 32), "float32"))
         return gv
@@ -1585,7 +1585,7 @@ def test_prim_value():
 
 
 def test_string_imm():
-    @R.function
+    @R.function(pure=False)
     def foo():
         gv = R.call_packed("test", "hello", sinfo_args=R.Tensor((32, 32), "float32"))
         return gv
@@ -1594,7 +1594,7 @@ def test_string_imm():
 
 
 def test_datatype_imm():
-    @R.function
+    @R.function(pure=False)
     def foo():
         gv = R.call_packed("test", R.dtype("float32"), sinfo_args=R.Tensor((32, 32), "float32"))
         return gv
@@ -2089,6 +2089,43 @@ def test_extern_func_in_module():
     expected = tvm.IRModule({"my_ext": relax.ExternFunc("my_ext"), "func": func})
 
     _check(parsed_module, expected)
+
+
+def test_define_relax_function_using_global_var():
+    """A @R.function may call a GlobalVar
+
+    When parsing a @R.function, the function's body may reference
+    GlobalVar instances available in the calling python scope.  The
+    resulting function should pass TVMScript's well-formed check, as
+    the GlobalVar may be available in the IRModule for which the
+    function is being defined.
+    """
+
+    @I.ir_module
+    class DefinedAllAtOnce:
+        @R.function
+        def main(A: R.Tensor, B: R.Tensor):
+            return DefinedAllAtOnce.subroutine(A, B)
+
+        @R.function(private=True)
+        def subroutine(A: R.Tensor, B: R.Tensor) -> R.Tensor:
+            return R.matmul(A, B)
+
+    @I.ir_module
+    class MainDefinedLater:
+        @R.function(private=True)
+        def subroutine(A: R.Tensor, B: R.Tensor) -> R.Tensor:
+            return R.matmul(A, B)
+
+    subroutine_gvar = MainDefinedLater.get_global_var("subroutine")
+
+    @R.function
+    def main(A: R.Tensor, B: R.Tensor):
+        return subroutine_gvar(A, B)
+
+    MainDefinedLater["main"] = main
+
+    tvm.ir.assert_structural_equal(DefinedAllAtOnce, MainDefinedLater)
 
 
 if __name__ == "__main__":

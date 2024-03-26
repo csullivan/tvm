@@ -38,12 +38,14 @@ if(USE_CUDA AND USE_CUTLASS)
   list(APPEND CUTLASS_FPA_INTB_RUNTIME_SRCS src/runtime/contrib/cutlass/moe_gemm.cc)
   list(APPEND CUTLASS_FPA_INTB_RUNTIME_SRCS src/runtime/contrib/cutlass/weight_preprocess.cc)
   add_library(fpA_intB_cutlass_objs OBJECT ${CUTLASS_FPA_INTB_RUNTIME_SRCS})
+  target_compile_definitions(fpA_intB_cutlass_objs PRIVATE DMLC_USE_LOGGING_LIBRARY=<tvm/runtime/logging.h>)
   target_include_directories(fpA_intB_cutlass_objs PRIVATE
+    ${PROJECT_SOURCE_DIR}/3rdparty/cutlass_fpA_intB_gemm
     ${PROJECT_SOURCE_DIR}/3rdparty/cutlass_fpA_intB_gemm/cutlass/include
   )
   list(APPEND CUTLASS_RUNTIME_OBJS "$<${CUTLASS_GEN_COND}:$<TARGET_OBJECTS:fpA_intB_cutlass_objs>>")
 
-  ### Build cutlass runtime objects for flash attention using its cutlass submodule
+  ### Build cutlass runtime objects for flash attention
   add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/libflash_attn)
   target_include_directories(flash_attn PRIVATE
     ${PROJECT_SOURCE_DIR}/3rdparty/libflash_attn

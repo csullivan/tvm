@@ -75,9 +75,10 @@ Module LoadVMModule(std::string path, Device device, AllocatorType alloc_type) {
 
 NDArray DiscoEmptyNDArray(ShapeTuple shape, DataType dtype, Device device,
                           AllocatorType alloc_type) {
-  auto allocator = MemoryManager::GetOrCreateAllocator(UseDefaultDeviceIfNone(device), alloc_type);
-  auto buffer = allocator->Alloc(shape, dtype);
-  auto storage = Storage(buffer);
+  device = UseDefaultDeviceIfNone(device);
+  auto allocator = MemoryManager::GetOrCreateAllocator(device, alloc_type);
+  auto buffer = allocator->Alloc(device, shape, dtype);
+  auto storage = Storage(buffer, allocator);
   return storage->AllocNDArray(/*offset=*/0, shape, dtype);
 }
 

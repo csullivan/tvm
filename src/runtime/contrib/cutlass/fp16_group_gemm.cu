@@ -17,13 +17,13 @@
  * under the License.
  */
 
-#include <optional>
-
 #include <cuda_fp16.h>
 #include <float.h>
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/packed_func.h>
 #include <tvm/runtime/registry.h>
+
+#include <optional>
 
 #include "group_gemm_runner.cuh"
 
@@ -66,14 +66,12 @@ void tvm_cutlass_group_gemm_sm90(NDArray x, NDArray weight, NDArray indptr, NDAr
   int n = weight->shape[1];
   int k = weight->shape[2];
 
-  if (x->shape[0] <= 4 && k % 8 == 0)
-  {
+  if (x->shape[0] <= 4 && k % 8 == 0) {
     fastertransformer::moe_gemm_bias_act<half, half>(
         reinterpret_cast<half*>(x->data), reinterpret_cast<half*>(weight->data), nullptr, nullptr,
-        reinterpret_cast<half*>(out->data),
-        reinterpret_cast<int64_t*>(indptr->data), x->shape[0], n, k, num_groups,
-        std::nullopt, stream);
-      return;
+        reinterpret_cast<half*>(out->data), reinterpret_cast<int64_t*>(indptr->data), x->shape[0],
+        n, k, num_groups, std::nullopt, stream);
+    return;
   }
 
   float alpha = 1.0f;
