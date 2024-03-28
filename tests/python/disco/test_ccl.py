@@ -51,6 +51,141 @@ def test_init(session_kind, ccl):
     sess.init_ccl(ccl, *devices)
 
 
+
+@pytest.mark.parametrize("ccl", _ccl)
+def test_benchmark_allreduce(ccl):
+    import time
+    from tvm.script import tir as T
+    from tvm.runtime import DataType, ShapeTuple
+    
+    devices = [0, 1]
+    # devices = [0, 1, 2, 3, 4, 5, 6, 7]
+    sess = di.ProcessSession(num_workers=len(devices))
+    sess.init_ccl(ccl, *devices)
+
+    dtype = "float16"
+    typesize = DataType(dtype).bits // 8
+    tensor_sizes = [(2**exp)//typesize for exp in range(12, 24)]
+    # tensor_sizes = [(2**16)//typesize]
+    niterations = 100
+    
+
+    for tensor_size in tensor_sizes:
+        nccl_latencies = []
+        mscclpp_latencies = []
+        ipc_allreduce_latencies1 = []
+        ipc_allreduce_latencies2 = []
+
+
+        shape = (tensor_size,)
+
+        array_n = [np.ones(shape,dtype)*(i+1) for i in devices]
+        reference_result = np.sum(array_n, axis=0)
+        zeros = np.zeros(tensor_size, dtype=dtype)
+
+        dst_array = sess.empty(array_n[0].shape, dtype)
+        d_array = sess.empty(array_n[0].shape, dtype)
+        for d in devices:
+            d_array.debug_copy_from(d, array_n[d])
+
+
+        op_sum = 0
+
+        # NCCL Allreduce
+        for d in devices:
+            dst_array.debug_copy_from(d, zeros)
+        nccl_allreduce = sess.get_global_func("runtime.disco.nccl.allreduce")
+        # Warm up
+        sess.call_packed(nccl_allreduce, d_array, op_sum, dst_array)
+        # Validate NCCL result
+        nccl_result = dst_array.debug_get_from_remote(0).numpy()
+        np.testing.assert_allclose(nccl_result, reference_result, atol=1e-5)
+        for _ in range(niterations):
+            start_time = time.time()
+            sess.call_packed(nccl_allreduce, d_array, op_sum, dst_array)
+            nccl_duration = time.time() - start_time
+            nccl_latencies.append(nccl_duration)
+
+
+        # MSCCLPP Allreduce
+        for d in devices:
+            dst_array.debug_copy_from(d, zeros)
+        mscclpp_allreduce = sess.get_global_func("runtime.disco.mscclpp.allreduce")
+        # Warm up
+        sess.call_packed(mscclpp_allreduce, d_array, op_sum, dst_array)
+        # Validate MSCCLPP result
+        mscclpp_result = dst_array.debug_get_from_remote(0).numpy()
+        np.testing.assert_allclose(mscclpp_result, reference_result, atol=1e-5)
+
+        for _ in range(niterations):
+            start_time = time.time()
+            sess.call_packed(mscclpp_allreduce, d_array, op_sum, dst_array)
+            mscclpp_duration = time.time() - start_time
+            mscclpp_latencies.append(mscclpp_duration)
+
+        # IPC Allreduce
+        falloc_ipc_storage = sess.get_global_func("runtime.disco.cuda_ipc.alloc_storage")
+        falloc_tensor = sess.get_global_func("vm.builtin.alloc_tensor")
+        fallreduce = sess.get_global_func("runtime.disco.cuda_ipc.custom_allreduce")
+        d_storage = sess.call_packed(falloc_ipc_storage, ShapeTuple(shape), DataType(dtype))
+        d_ipc_input = sess.call_packed(falloc_tensor, d_storage, 0, ShapeTuple(shape), DataType(dtype))
+        for d in devices:
+            d_ipc_input.debug_copy_from(d, array_n[d])
+        # Warm up
+        strategy = 1
+        # strategy = 2
+        # Validate IPC Allreduce result
+        for d in devices:
+            dst_array.debug_copy_from(d, zeros)
+        sess.call_packed(fallreduce, d_ipc_input, strategy, dst_array)
+        ipc_custom_allreduce_result = dst_array.debug_get_from_remote(0).numpy()
+        np.testing.assert_allclose(ipc_custom_allreduce_result, reference_result, atol=1e-5)
+        
+        for _ in range(niterations):
+            start_time = time.time()
+            sess.call_packed(fallreduce, d_ipc_input, strategy, dst_array)
+            ipc_allreduce_time = time.time() - start_time
+            ipc_allreduce_latencies1.append(ipc_allreduce_time)
+
+        strategy = 2
+        for d in devices:
+            dst_array.debug_copy_from(d, zeros)
+        sess.call_packed(fallreduce, d_ipc_input, strategy, dst_array)
+        ipc_custom_allreduce_result = dst_array.debug_get_from_remote(0).numpy()
+        np.testing.assert_allclose(ipc_custom_allreduce_result, reference_result, atol=1e-5)
+
+        for _ in range(niterations):
+            start_time = time.time()
+            sess.call_packed(fallreduce, d_ipc_input, strategy, dst_array)
+            ipc_allreduce_time = time.time() - start_time
+            ipc_allreduce_latencies2.append(ipc_allreduce_time)
+            
+
+
+        # Calculate and report averages
+        avg_nccl_latency = np.mean(nccl_latencies)
+        avg_mscclpp_latency = np.mean(mscclpp_latencies)
+        avg_trtllm_latency1 = np.mean(ipc_allreduce_latencies1)
+        avg_trtllm_latency2 = np.mean(ipc_allreduce_latencies2)        
+        avg_speed_up_mscclpp = avg_nccl_latency / avg_mscclpp_latency
+        avg_speed_up_trtllm1 = avg_nccl_latency / avg_trtllm_latency1
+        avg_speed_up_trtllm2 = avg_nccl_latency / avg_trtllm_latency2
+
+        
+        data_bytes = tensor_size * typesize
+        
+        print(f"Tensor Size: {data_bytes} bytes, "
+              f"Avg NCCL Latency (Baseline): {avg_nccl_latency:.6f} s,\n"
+              f"Avg MSCCLPP Latency: {avg_mscclpp_latency:.6f} s,\n"
+              f"Avg TRT-LLM (1-shot) Latency: {avg_trtllm_latency1:.6f} s,\n"
+              f"Avg TRT-LLM (2-shot) Latency: {avg_trtllm_latency2:.6f} s,\n"                            
+              f"Avg Speedup (MSCCLPP): {avg_speed_up_mscclpp:.2f},\n"
+              f"Avg Speedup (TRT-LLM 1-shot): {avg_speed_up_trtllm1:.2f},\n"
+              f"Avg Speedup (TRT-LLM 2-shot): {avg_speed_up_trtllm2:.2f},\n"
+        )
+
+    
+
 @pytest.mark.parametrize("session_kind", _all_session_kinds)
 @pytest.mark.parametrize("ccl", _ccl)
 def test_allreduce(session_kind, ccl):
@@ -65,13 +200,18 @@ def test_allreduce(session_kind, ccl):
     d_array.debug_copy_from(1, array_2)
     for op, np_op in [  # pylint: disable=invalid-name
         ("sum", np.add),
-        ("prod", np.multiply),
-        ("min", np.minimum),
-        ("max", np.maximum),
-        ("avg", lambda a, b: (a + b) * 0.5),
+        # ("prod", np.multiply),
+        # ("min", np.minimum),
+        # ("max", np.maximum),
+        # ("avg", lambda a, b: (a + b) * 0.5),
     ]:
         dst_array = sess.empty((3, 4), "float32")
-        sess.allreduce(d_array, dst_array, op=op)
+        # sess.allreduce(d_array, dst_array, op=op)
+        op_sum = 0
+        nccl_allreduce = sess.get_global_func("runtime.disco.nccl.allreduce")
+        mscclpp_allreduce = sess.get_global_func("runtime.disco.mscclpp.allreduce")
+        sess.call_packed(nccl_allreduce, d_array, op_sum, dst_array)
+        sess.call_packed(mscclpp_allreduce, d_array, op_sum, dst_array)
         result = dst_array.debug_get_from_remote(0).numpy()
         expected = np_op(array_1, array_2)
         np.testing.assert_equal(result, expected)

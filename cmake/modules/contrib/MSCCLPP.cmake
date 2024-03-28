@@ -35,10 +35,15 @@ if(USE_CUDA AND USE_NCCL)
   add_library(msccl SHARED ${MSCCL_SRCS})
   target_link_libraries(msccl PUBLIC mscclpp)
   target_compile_definitions(msccl PRIVATE DMLC_USE_LOGGING_LIBRARY=<tvm/runtime/logging.h>)
+
   target_include_directories(msccl PUBLIC
     $<BUILD_INTERFACE:${mscclpp_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/3rdparty/mscclpp/include>
     $<INSTALL_INTERFACE:include/msccl>
+  )
+  include_directories(
+    ${mscclpp_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/3rdparty/mscclpp/include
   )
 
   install(TARGETS mscclpp_obj
