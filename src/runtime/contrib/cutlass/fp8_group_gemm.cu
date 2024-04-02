@@ -54,6 +54,8 @@ void tvm_cutlass_fp8_group_gemm(NDArray x, NDArray weight, NDArray indptr, NDArr
   CHECK_EQ(out->ndim, 2);
   CHECK_EQ(alpha->dtype.code, kDLFloat);
   CHECK_EQ(alpha->dtype.bits, 32);
+  CHECK_EQ(alpha->ndim, 1);
+  CHECK_EQ(alpha->shape[0], 1);
   int num_groups = weight->shape[0];
   int n = weight->shape[1];
   int k = x->shape[1];
