@@ -20,6 +20,7 @@
 /*!
  * \file Use external cblas library call.
  */
+#include <nvtx3/nvToolsExt.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/runtime/registry.h>
@@ -30,6 +31,12 @@
 
 namespace tvm {
 namespace contrib {
+
+const char* const matmul_tile_name[] = {
+    "UNDEF",  "8x8",    "8x16",    "16x8",   "8x32",   "16x16",   "32x8",    "8x64",   "16x32",
+    "32x16",  "64x8",   "32x32",   "32x64",  "64x32",  "32x128",  "64x64",   "128x32", "64x128",
+    "128x64", "64x256", "128x128", "256x64", "64x512", "128x256", "256x128", "512x64",
+};
 
 using namespace runtime;
 inline cublasOperation_t CUBLASBooleanToTranspose(bool item) {
@@ -167,6 +174,7 @@ void CallCublasLt(cublasLtHandle_t hdl, cudaStream_t stream,
   } else if (TypeMatch(A->dtype, DataType::TypeCode::kE4M3Float, 8)) {
     ICHECK(TypeMatch(B->dtype, DataType::TypeCode::kE4M3Float, 8));
     ab_type = CUDA_R_8F_E4M3;
+    c_type = CUDA_R_16F;
   }
 
   if (TypeMatch(C->dtype, kDLFloat, 16)) {
@@ -188,6 +196,12 @@ void CallCublasLt(cublasLtHandle_t hdl, cudaStream_t stream,
                                                     &op_transb, sizeof(op_transb)));
   CHECK_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(op_desc, CUBLASLT_MATMUL_DESC_TRANSB,
                                                     &op_transa, sizeof(op_transa)));
+
+  if (ab_type == CUDA_R_8F_E4M3) {
+    const int8_t fast_acc = 1;
+    CHECK_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(op_desc, CUBLASLT_MATMUL_DESC_FAST_ACCUM,
+                                                      &fast_acc, sizeof(fast_acc)));
+  }
 
   if (bias != nullptr) {
     CHECK_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(op_desc, CUBLASLT_MATMUL_DESC_BIAS_POINTER,
@@ -211,6 +225,9 @@ void CallCublasLt(cublasLtHandle_t hdl, cudaStream_t stream,
   int batch_offset_A = A->ndim - 2;
   int batch_offset_B = B->ndim - 2;
 
+  // TVM A is (N, K) and TVM B is (K, M)
+  // so cublas needs to do
+  // transa = 0 and transb = 1 means A_cublas = (K, N) and B_cublas (K, M)
   int M = ColumnCount(B, transb, batch_offset_B);
   int N = RowCount(A, transa, batch_offset_A);
   int K = ColumnCount(A, transa, batch_offset_A);
@@ -285,13 +302,100 @@ void CallCublasLt(cublasLtHandle_t hdl, cudaStream_t stream,
   CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoGetHeuristic(hdl, op_desc, A_desc, B_desc, C_desc, C_desc,
                                                     matmul_pref_desc, 1, &heuristic_result,
                                                     &returned_result));
+
+  if (ab_type == CUDA_R_8F_E4M3) {
+#define ALGO_IDS 1000
+    int nbAlgoIds = 0;
+    int algoIdA[ALGO_IDS];
+
+    CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoGetIds(hdl, compute_type, scale_type, ab_type, ab_type,
+                                                c_type, c_type, ALGO_IDS, algoIdA, &nbAlgoIds));
+
+    for (int idx = 0; (idx < nbAlgoIds); idx++) {
+      // cublasLtMatmulAlgo_t algo;
+
+      // /* Initialize algo structure with given Algp ID */
+      // CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoInit(hdl, compute_type, scale_type, ab_type, ab_type,
+      //                                           c_type, c_type, algoIdA[idx], &algo));
+      size_t sizeWritten = 0;
+      CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoCapGetAttribute(
+          &heuristic_result.algo, CUBLASLT_ALGO_CAP_TILE_IDS, NULL, 0, &sizeWritten));
+
+      int nbTiles = int(sizeWritten / sizeof(int));
+      int* tileA = new int[nbTiles == 0 ? 1 : nbTiles];
+      if (nbTiles == 0) {
+        tileA[0] = CUBLASLT_MATMUL_TILE_UNDEFINED;
+        nbTiles = 1;
+      }
+      std::cout << "(M, N, K): (" << N << ", " << M << ", " << K << ")\n";
+      std::cout << "transa: " << transa << " transb: " << transb << std::endl;
+
+      CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoCapGetAttribute(&heuristic_result.algo,
+                                                           CUBLASLT_ALGO_CAP_TILE_IDS, tileA,
+                                                           sizeof(int) * nbTiles, &sizeWritten));
+
+      for (int tileIdx = 0; tileIdx < nbTiles; tileIdx++) {
+        std::cout << tileA[tileIdx] << " - Available tile sizes for fp8 cublaslt: "
+                  << matmul_tile_name[tileA[tileIdx]] << std::endl;
+      }
+      delete tileA;
+    }
+    if (N < 32) {
+      int tile_choice = 17;
+      CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoConfigSetAttribute(
+          &heuristic_result.algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tile_choice, sizeof(tile_choice)));
+    }
+  }
+  CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoCheck(hdl, op_desc, A_desc, B_desc, C_desc, C_desc,
+                                             &heuristic_result.algo, &heuristic_result));
+
+  int tile = 0;
+  CHECK_CUBLAS_ERROR(cublasLtMatmulAlgoConfigGetAttribute(
+      &heuristic_result.algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tile, sizeof(tile), NULL));
+
+  std::cout << "Choose tile size: " << matmul_tile_name[tile] << " - tile index: " << tile
+            << std::endl;
+
   if (returned_result == 0) {
     CHECK_CUBLAS_ERROR(CUBLAS_STATUS_NOT_SUPPORTED);
   }
+  std::stringstream ss;
+  ss << "cublasLtMatmul-" << N << " " << M << " "
+     << " " << K;
+  cudaDeviceSynchronize();
+  nvtxRangePush(ss.str().c_str());
+
+  int algoId, tile2, swizzle, customOption, numSplitsK, reductionScheme, stages, inner_shape,
+      cluster_shape;
+  const cublasLtMatmulAlgo_t* matmulAlgo = &heuristic_result.algo;
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_ID, &algoId, sizeof(algoId),
+                                       NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tile2,
+                                       sizeof(tile2), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &numSplitsK,
+                                       sizeof(numSplitsK), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,
+                                       &reductionScheme, sizeof(reductionScheme), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &swizzle,
+                                       sizeof(swizzle), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION,
+                                       &customOption, sizeof(customOption), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages,
+                                       sizeof(stages), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID,
+                                       &inner_shape, sizeof(inner_shape), NULL);
+  cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID,
+                                       &cluster_shape, sizeof(cluster_shape), NULL);
+
+  std::cout << algoId << " - " << tile2 << " - " << swizzle << " - " << customOption << " - "
+            << numSplitsK << " - " << reductionScheme << " - " << stages << " - " << inner_shape
+            << " - " << cluster_shape << std::endl;
 
   CHECK_CUBLAS_ERROR(cublasLtMatmul(hdl, op_desc, alpha, B_data, A_desc, A_data, B_desc, beta,
                                     C_data, C_desc, C_data, C_desc, &heuristic_result.algo,
                                     workspace_ptr, workspace_size, stream));
+  cudaDeviceSynchronize();
+  nvtxRangePop();
 
   cublasLtMatmulDescDestroy(op_desc);
   cublasLtMatrixLayoutDestroy(A_desc);
