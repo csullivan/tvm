@@ -179,6 +179,7 @@ std::string CodeGenC::Finish() {
   code << decl_stream.str();
   code << fwd_decl_stream.str();
   code << stream.str();
+  std::cout << code.str() << std::endl;
   return code.str();
 }
 

@@ -41,6 +41,16 @@ namespace tir {
 
 /*! \brief Collection of builtin intrinsics as ops */
 namespace builtin {
+ /*!
+ * \brief Call a device-specific function
+ *
+ *  Type call_device_func(const char* func_name, Expr arg) {
+ *    // Call the device-specific function with the given name and argument
+ *    return device_specific_call(func_name, arg);
+ *  }
+ */
+TVM_DLL const Op& call_device_func();
+
 /*!
  * \brief Return value.
  */

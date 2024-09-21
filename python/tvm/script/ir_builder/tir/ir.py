@@ -1933,6 +1933,7 @@ vectorhigh = _dtype_forward(_tir_op.vectorhigh)
 vectorcombine = _dtype_forward(_tir_op.vectorcombine)
 get_active_lane_mask = _dtype_forward(_tir_op.get_active_lane_mask)
 dp4a = _dtype_forward(_tir_op.dp4a)
+call_device_func = _dtype_forward(_tir_op.call_device_func)
 
 
 broadcast = Broadcast
@@ -2255,4 +2256,5 @@ __all__ = [
     "Range",
     "vscale",
     "get_active_lane_mask",
+    "call_device_func",
 ]

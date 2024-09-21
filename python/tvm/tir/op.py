@@ -1121,6 +1121,18 @@ def ptx_mma(
         operator,
     )
 
+def call_device_func(func_name, *args):
+    """Call a device function
+
+    Parameters
+    ----------
+    func_name : str
+        The name of the device function.
+    args : list
+        The arguments to the device function.
+    """ 
+    return call_intrin("int", "tir.call_device_func", func_name, *args)
+
 
 def ptx_mma_sp(
     dtype,
@@ -3579,6 +3591,7 @@ def get_vscale_expr(dtype: Union[str, tvm.DataType], min_size: int = 128) -> Pri
     if isinstance(dtype, str):
         dtype = tvm.DataType(dtype)
     return min_size // dtype.bits * vscale()
+
 
 
 # pylint: disable=unnecessary-lambda

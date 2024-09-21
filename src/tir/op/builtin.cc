@@ -422,6 +422,12 @@ TIR_DEFINE_BUILTIN_FUNC(get_active_lane_mask)
     .set_attr<TScriptDtypePrintLocation>("TScriptDtypePrintLocation",
                                          Integer(ScriptDtypePrintLocation::kFirst));
 
+TIR_DEFINE_BUILTIN_FUNC(call_device_func)
+    .set_num_inputs(-1)  // Variable number of inputs
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TScriptDtypePrintLocation>("TScriptDtypePrintLocation",
+                                         Integer(ScriptDtypePrintLocation::kFirst));
+
 }  // namespace builtin
 }  // namespace tir
 }  // namespace tvm

@@ -203,6 +203,10 @@ std::string CodeGenCUDA::Finish() {
   decl_stream << "  #define uint64_t unsigned long long\n";
   decl_stream << "#endif\n";
 
+  decl_stream << "__device__ void my_device_func_test() {\n";
+  decl_stream << "  printf(\"Hello from device function!\\n\");\n";
+  decl_stream << "}\n";
+
   return CodeGenC::Finish();
 }
 
@@ -1099,7 +1103,16 @@ void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
     stream << ": \"l\"((void*)(" << global_buffer << "+" << global_addr << ")), \"r\"((int)"
            << guard << ")\n";
     stream << ");\n";
-  } else {
+  } else if (op->op.same_as(builtin::call_device_func())) {
+    std::string func_name = this->PrintExpr(op->args[0]);
+    os << func_name.substr(1, func_name.length() - 2) << "(";
+    for (size_t i = 1; i < op->args.size(); ++i) {
+      if (i > 1) os << ", ";
+      this->PrintExpr(op->args[i], os);
+    }
+    os << ");\n";
+  }
+  else {
     CodeGenC::VisitExpr_(op, os);
   }
 }
